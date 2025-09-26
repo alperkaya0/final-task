@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  # ---------------------------------
+  # 1. FastAPI Application Service
+  # ---------------------------------
+  web:
+    # Instructions to build the image using your custom Dockerfile
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # Map host port 8000 to container port 80
+    ports:
+      - "8000:8000"
+    # Ensure the DB is ready before the app tries to start
+    depends_on:
+      - db
+    # Set connection details that your FastAPI app (e.g., SQLAlchemy) needs
+    environment:
+      - DB_HOST=db                 # Use the service name as the host
+      - DB_NAME=mydatabase
+      - DB_USER=myuser
+      - DB_PASSWORD=mypassword
+
+  # ---------------------------------
+  # 2. PostgreSQL Database Service
+  # ---------------------------------
+  db:
+    # Use the official, pre-built PostgreSQL image (no Dockerfile needed here)
+    image: postgres:16-alpine
+    restart: always
+    # Set the initial environment variables for the DB
+    environment:
+      - POSTGRES_DB=mydatabase
+      - POSTGRES_USER=myuser
+      - POSTGRES_PASSWORD=mypassword
+    # Persist the database data to a volume outside the container
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/
+    # Optional: Map the DB port to your host for local access (e.g., a DB tool)
+    # ports:
+    #   - "5432:5432"
+
+# Define the volume for persistent data storage
+volumes:
+  postgres_data:

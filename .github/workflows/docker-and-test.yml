@@ -1,0 +1,107 @@
+name: Build and Push Docker Image
+
+on:
+  push:
+    branches:
+      - main # Trigger on push to the 'main' branch
+    tags:
+      - 'v*' # Trigger on tags starting with 'v'
+
+env:
+  REGISTRY: ghcr.io # Use GitHub Container Registry
+  IMAGE_NAME: ${{ github.repository }} # Image name based on the repo name (e.g., owner/repo)
+
+jobs:
+  test:
+    # Use the latest Ubuntu runner
+    runs-on: ubuntu-latest
+
+    # Define services required by your tests (PostgreSQL database)
+    services:
+      # Creates a postgres service container for testing
+      postgres:
+        image: postgres:16-alpine
+        ports:
+          # Maps the container port 5432 to the host port 5432
+          - 5432:5432
+        environment:
+          # These variables configure the test database
+          POSTGRES_DB: test_db
+          POSTGRES_USER: test_user
+          POSTGRES_PASSWORD: test_password
+        # Set a health check to ensure the DB is ready before running tests
+        options: >
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # --------------------------------
+      # Setup Python Environment
+      # --------------------------------
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          # Install necessary system libraries for psycopg2 (PostgreSQL client)
+          sudo apt-get update
+          sudo apt-get install libpq-dev
+          
+          # Install Python dependencies including testing tools
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          # Install pytest if not already in requirements.txt
+          pip install pytest
+
+      # --------------------------------
+      # Run Tests
+      # --------------------------------
+      - name: Run Pytest
+        # Set environment variables for the tests to connect to the service
+        env:
+          # Note: The host name is the service name 'postgres'
+          DATABASE_URL: postgresql://test_user:test_password@postgres:5432/test_db
+        run: |
+          pytest tests.py
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # Necessary for pushing to GHCR
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }} # Use the built-in GITHUB_TOKEN for GHCR
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', 'main') }}
+            type=sha,format=short
+            type=ref,event=branch
+            type=semver,pattern=v{{version}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: . # Path to the build context (where the Dockerfile is)
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
