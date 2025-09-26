@@ -1,5 +1,5 @@
 from typing import Optional
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Depends
 from pydantic import BaseModel
 from sqlalchemy import create_engine
 from sqlalchemy.engine import URL
@@ -9,10 +9,19 @@ from sqlalchemy.orm import declarative_base, relationship, Mapped, mapped_column
 import typing
 from typing import List, Optional
 from sqlalchemy import Integer, String, ForeignKey, Text
+from sqlalchemy.orm import sessionmaker
 from sqlalchemy.orm import declarative_base, relationship, Mapped, mapped_column, sessionmaker
 from sqlalchemy.ext.associationproxy import association_proxy
-# ... (rest of your imports)
+from datetime import datetime, timedelta
+from jose import JWTError, jwt
+import hashlib
 import os
+
+# replace it with your 32 bit secret key
+SECRET_KEY = "09d25e094faalp9okxvcvd28tjbaf7099f6f0f4caa6cf63b88e8d3e7"
+
+# encryption algorithm
+ALGORITHM = "HS256"
 
 # -----------------
 # 1. Pydantic Models (Data Structure/Validation)
@@ -122,16 +131,46 @@ connection_url = URL.create(
     password=os.environ["DB_PASSWORD"]
 )
 
-engine = create_engine(connection_url, pool_pre_ping=True)
+engine = create_engine(connection_url)
 
 # wait until postgres container can accept connection requests
 __import__("time").sleep(5)
 
 Base.metadata.create_all(engine)
 
+class LoginModel(BaseModel):
+    username: str
+    password: str
+
+class RegisterModel(BaseModel):
+    username: str
+    password: str
+    repeat_password: str
+
 # -----------------
 # 3. Routes (Endpoints)
 # -----------------
+
+Session = sessionmaker(bind=engine)
+session = Session()
+
+def verify_token(req: Request):
+    token = req.headers["Authorization"] if "Authorization" in req.headers else ""
+    try:
+        # try to decode the token, it will 
+        # raise error if the token is not correct
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return True
+    except JWTError:
+        raise HTTPException(
+            status_code=401,
+            detail="Could not validate jwt token",
+        )
+
+def hash_data(strdata):
+    m = hashlib.sha256()
+    m.update(strdata.encode("utf-8"))
+    return m.hexdigest()
 
 # GET Endpoint: Root Path
 @app.get("/")
@@ -141,70 +180,89 @@ async def read_root():
 
 # POST /auth - Create user (login, password, repeat password)
 @app.post("/auth")
-async def auth_method():
-    pass
+async def auth_method(model: RegisterModel):
+    if (model.password != model.repeat_password):
+        raise HTTPException(
+            status_code=400,
+            detail="Passwords are different!",
+        )
+    new_data = UserTable(login=model.username, password_hash=hash_data(model.password))
+    session.add(new_data)
+    session.commit()
 
 # POST /login - Login into service (login, password)
 @app.post("/login")
-async def login_method():
-    pass
+async def login_method(model: LoginModel):
+    user_query = session.query(UserTable)
+    user = user_query.filter(UserTable.login == model.username).first()
+    if user and hash_data(model.password) == user.password_hash:
+        to_encode = {"login": model.username}
+        expire = datetime.utcnow() + timedelta(minutes=60)
+        to_encode.update({"exp": expire})
+        encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+        return {"token": encoded_jwt}
+    else:
+        raise HTTPException(
+            status_code=403,
+            detail="Incorrect credentials!",
+        )
 
 # POST /projects - Create project from details (name, description).
 # Automatically gives access to created project to user, making him the owner (admin of the project).
 @app.post("/projects")
-async def post_project():
+async def post_project(authorized: bool = Depends(verify_token)):
     pass
 
 # GET /projects - Get all projects, accessible for a user. Returns list of projects full info(details + documents).
 @app.get("/projects")
-async def get_projects():
+async def get_projects(authorized: bool = Depends(verify_token)):
     pass
 
 # GET /project/<project_id>/info - Return project’s details, if user has access
 @app.get("/projects/{project_id}/info")
-async def get_project(project_id: int):
+async def get_project(project_id: int, authorized: bool = Depends(verify_token)):
     pass
 
 # PUT /project/<project_id>/info - Update projects details - name, description. Returns the updated project’s info
 @app.put("/projects/{project_id}/info")
-async def put_project(project_id: int): # needs to get a project model from request body
+async def put_project(project_id: int, authorized: bool = Depends(verify_token)): # needs to get a project model from request body
     pass
 
 # DELETE /project/<project_id>- Delete project, can only be performed by the projects’ owner. Deletes the corresponding documents
 @app.delete("/project/{project_id}")
-async def delete_project(project_id: int):
+async def delete_project(project_id: int, authorized: bool = Depends(verify_token)):
     pass
 
 # GET /project/<project_id>/documents- Return all of the project's documents
 @app.get("/project/{project_id}/documents")
-async def get_documents(project_id: int):
+async def get_documents(project_id: int, authorized: bool = Depends(verify_token)):
     pass
 
 # POST /project/<project_id>/documents - Upload document/documents for a specific project
 @app.post("/project/{project_id}/documents")
-async def post_document(project_id: int):
+async def post_document(project_id: int, authorized: bool = Depends(verify_token)):
     pass
 
 # GET /document/<document_id> - Download document, if the user has access to the corresponding project
 @app.get("/document/{document_id}")
-async def get_document(document_id: int):
+async def get_document(document_id: int, authorized: bool = Depends(verify_token)):
     pass
 
 # PUT /document/<document_id> - Update document
 @app.put("/document/{document_id}")
-async def put_document(document_id: int):
+async def put_document(document_id: int, authorized: bool = Depends(verify_token)):
     pass
 
 # DELETE /document/<document_id> - Delete document and remove it from the corresponding project
 @app.delete("/document/{document_id}")
-async def delete_document(document_id: int):
+async def delete_document(document_id: int, authorized: bool = Depends(verify_token)):
     pass
 
 # POST /project/<project_id>/invite?user= - Grant access to the project for a specific user.
 # If the request is not coming from the owner of the project, results in error.,
 # Granting access gives participant permissions to receiving user
 @app.post("/project/{project_id}/invite?user={username}")
-async def invite_to_project(project_id: int, username: str):
+async def invite_to_project(project_id: int, username: str, authorized: bool = Depends(verify_token)):
     pass
 
 # Run with: uvicorn app.main:app --reload
