@@ -70,7 +70,7 @@ jobs:
           DATABASE_URL: postgresql://test_user:test_password@postgres:5432/test_db
         run: |
           pytest tests.py
-
+  
   build-and-push:
     runs-on: ubuntu-latest
     permissions:
