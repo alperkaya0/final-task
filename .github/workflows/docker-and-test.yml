@@ -70,11 +70,14 @@ jobs:
           DATABASE_URL: postgresql://test_user:test_password@postgres:5432/test_db
         run: |
           pytest tests.py
+
   build-and-push:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write # Necessary for pushing to GHCR
+
+    needs: test
 
     steps:
       - name: Checkout repository
