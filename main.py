@@ -7,7 +7,7 @@ from sqlalchemy import Table, MetaData
 from sqlalchemy import Column, Integer, String, ForeignKey, UniqueConstraint, Text
 from sqlalchemy.orm import declarative_base, relationship, Mapped, mapped_column
 import typing
-from typing import List, Optional # <--- FIX: Add List and Optional here!
+from typing import List, Optional
 from sqlalchemy import Integer, String, ForeignKey, Text
 from sqlalchemy.orm import declarative_base, relationship, Mapped, mapped_column, sessionmaker
 from sqlalchemy.ext.associationproxy import association_proxy
@@ -109,8 +109,8 @@ class Document(Base):
 
 # Create the FastAPI application instance
 app = FastAPI(
-    title="Minimal FastAPI Template",
-    description="A simple API demonstrating GET and POST methods.",
+    title="Final Task",
+    description="Project management api",
     version="1.0.0"
 )
 
@@ -124,6 +124,7 @@ connection_url = URL.create(
 
 engine = create_engine(connection_url, pool_pre_ping=True)
 
+# wait until postgres container can accept connection requests
 __import__("time").sleep(5)
 
 Base.metadata.create_all(engine)
@@ -136,15 +137,74 @@ Base.metadata.create_all(engine)
 @app.get("/")
 async def read_root():
     """Returns a simple welcome message."""
-    return {"message": "Welcome to the FastAPI Template!"}
+    return {"message": "Welcome to the Project Management API! Please go to /auth or /login to authorize"}
 
-# GET Endpoint: Path Parameters
-@app.get("/items/{item_id}")
-async def read_item(item_id: int):
-    """Retrieves an item by its ID (example only)."""
-    if item_id < 1:
-        # FastAPI handles exceptions gracefully
-        raise HTTPException(status_code=400, detail="Item ID must be positive")
-    return {"item_id": item_id, "name": f"Item {item_id}"}
+# POST /auth - Create user (login, password, repeat password)
+@app.post("/auth")
+async def auth_method():
+    pass
+
+# POST /login - Login into service (login, password)
+@app.post("/login")
+async def login_method():
+    pass
+
+# POST /projects - Create project from details (name, description).
+# Automatically gives access to created project to user, making him the owner (admin of the project).
+@app.post("/projects")
+async def post_project():
+    pass
+
+# GET /projects - Get all projects, accessible for a user. Returns list of projects full info(details + documents).
+@app.get("/projects")
+async def get_projects():
+    pass
+
+# GET /project/<project_id>/info - Return project’s details, if user has access
+@app.get("/projects/{project_id}/info")
+async def get_project(project_id: int):
+    pass
+
+# PUT /project/<project_id>/info - Update projects details - name, description. Returns the updated project’s info
+@app.put("/projects/{project_id}/info")
+async def put_project(project_id: int): # needs to get a project model from request body
+    pass
+
+# DELETE /project/<project_id>- Delete project, can only be performed by the projects’ owner. Deletes the corresponding documents
+@app.delete("/project/{project_id}")
+async def delete_project(project_id: int):
+    pass
+
+# GET /project/<project_id>/documents- Return all of the project's documents
+@app.get("/project/{project_id}/documents")
+async def get_documents(project_id: int):
+    pass
+
+# POST /project/<project_id>/documents - Upload document/documents for a specific project
+@app.post("/project/{project_id}/documents")
+async def post_document(project_id: int):
+    pass
+
+# GET /document/<document_id> - Download document, if the user has access to the corresponding project
+@app.get("/document/{document_id}")
+async def get_document(document_id: int):
+    pass
+
+# PUT /document/<document_id> - Update document
+@app.put("/document/{document_id}")
+async def put_document(document_id: int):
+    pass
+
+# DELETE /document/<document_id> - Delete document and remove it from the corresponding project
+@app.delete("/document/{document_id}")
+async def delete_document(document_id: int):
+    pass
+
+# POST /project/<project_id>/invite?user= - Grant access to the project for a specific user.
+# If the request is not coming from the owner of the project, results in error.,
+# Granting access gives participant permissions to receiving user
+@app.post("/project/{project_id}/invite?user={username}")
+async def invite_to_project(project_id: int, username: str):
+    pass
 
 # Run with: uvicorn app.main:app --reload
