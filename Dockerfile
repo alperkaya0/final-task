@@ -23,4 +23,4 @@ EXPOSE 8000
 
 # Define the command to run your application when the container starts
 # Replace 'main.py' with your actual entry point script
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
