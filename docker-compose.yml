@@ -37,6 +37,7 @@ services:
     # Persist the database data to a volume outside the container
     volumes:
       - postgres_data:/var/lib/postgresql/data/
+      - ./init-database:/docker-entrypoint-initdb.d/ 
     # Optional: Map the DB port to your host for local access (e.g., a DB tool)
     # ports:
     #   - "5432:5432"
