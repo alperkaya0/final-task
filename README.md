@@ -1,7 +1,9 @@
 ## General description:
 Theme: Project management/profiles dashboard - a service to  create, update, share, and delete projects information (details, attached documents)
+### Warning
+Do `docker-compose down --volumes` beforehand if you are going to use docker-compose to both create web and db containers. Otherwise postgresql won't run schemas.sql and thus won't create sql tables.
 ### Stack:
-- Python3.10
+- Python3.12
 - FastAPI
 - PostgreSQL + Optional ORM (SQLAlchemy, etc)
 - Docker
