@@ -1,5 +1,5 @@
 from typing import Optional, Annotated
-from fastapi import FastAPI, HTTPException, Request, Depends, Header
+from fastapi import FastAPI, HTTPException, Request, Depends, Header, File
 from pydantic import BaseModel
 from sqlalchemy import create_engine
 from sqlalchemy.engine import URL
@@ -12,13 +12,21 @@ from sqlalchemy import Integer, String, ForeignKey, Text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.orm import declarative_base, relationship, Mapped, mapped_column, sessionmaker
 from sqlalchemy.ext.associationproxy import association_proxy
+import boto3
+from botocore.exceptions import ClientError
 from datetime import datetime, timedelta
 from jose import JWTError, jwt
+from dotenv import load_dotenv
 import hashlib
 import os
 
+# so that aws.env file's contents will override the environment variables given to this container
+load_dotenv()
+
 # replace it with your 32 bit secret key
 SECRET_KEY = "09d25e094faalp9okxvcvd28tjbaf7099f6f0f4caa6cf63b88e8d3e7"
+
+BUCKET_NAME = "FINAL_TASK_S3_BUCKET"
 
 # encryption algorithm
 ALGORITHM = "HS256"
@@ -132,6 +140,13 @@ connection_url = URL.create(
 )
 
 engine = create_engine(connection_url)
+
+s3 = boto3.client('s3',
+         aws_access_key_id=os.environ["aws_access_key_id"],
+         aws_secret_access_key=os.environ["aws_secret_access_key"])
+
+if BUCKET_NAME not in [x["Name"] for x in s3.list_buckets()["Buckets"]]:
+    s3.create_bucket(Bucket=BUCKET_NAME)
 
 # wait until postgres container can accept connection requests
 __import__("time").sleep(5)
@@ -324,7 +339,7 @@ async def delete_project(project_id: int, authorized: bool = Depends(verify_toke
         user_id = user.user_id
         # check access
         relation = session.query(UserToProject).filter(UserToProject.user_id == user_id and UserToProject.project_id == project_id).first()
-        if not relation and relation.access_type == "owner":
+        if not relation or relation.access_type != "owner":
             raise HTTPException(
                 status_code=403,
                 detail="You don't have owner access to this project!",
@@ -372,8 +387,44 @@ async def get_documents(project_id: int, authorized: bool = Depends(verify_token
 
 # POST /project/<project_id>/documents - Upload document/documents for a specific project
 @app.post("/project/{project_id}/documents")
-async def post_document(project_id: int, authorized: bool = Depends(verify_token), authorization: Annotated[str | None, Header()] = None):
-    pass
+async def post_document(file: Annotated[bytes, File()], project_id: int, authorized: bool = Depends(verify_token), authorization: Annotated[str | None, Header()] = None):
+    if authorized:
+        try:
+            # get user id
+            token = extract_token(authorization)
+            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+            user = session.query(UserTable).filter(UserTable.login == payload["login"]).first()
+            if not user:
+                raise HTTPException(
+                    status_code=403,
+                    detail="User couldn't find!",
+                )
+            user_id = user.user_id
+            # check access
+            relation = session.query(UserToProject).filter(UserToProject.user_id == user_id and UserToProject.project_id == project_id).first()
+            if not relation or relation.access_type != "owner":
+                raise HTTPException(
+                    status_code=403,
+                    detail="You don't have access to this project!",
+                )
+            # upload document
+            digestable = file.name + datetime.utcnow()
+            response = s3_client.upload_fileobj(file, bucket, hash_data(digestable))
+            session.add(Document(name=file.name,s3_key=hash_data(digestable)))
+            session.commit()
+            doc_id = session.query(Document).filter(Document.name == file.name and Document.s3_key == hash_data(digestable)).first().document_id
+            relation = ProjectToDocument(document_id=doc_id, project_id=project_id)
+            session.add(relation)
+            session.commit()
+            return {"success":True, "document_id":doc_id}
+        except ClientError as e:
+            print(e)
+            raise HTTPException(
+                status_code=500,
+                detail="Couldn't upload it to AWS!"
+            )
+        except HTTPException as e:
+            raise e
 
 # GET /document/<document_id> - Download document, if the user has access to the corresponding project
 @app.get("/document/{document_id}")
@@ -408,7 +459,7 @@ async def invite_to_project(project_id: int, username: str, authorized: bool = D
         user_id = user.user_id
         # check access
         relation = session.query(UserToProject).filter(UserToProject.user_id == user_id and UserToProject.project_id == project_id).first()
-        if not relation and relation.access_type == "owner":
+        if not relation or relation.access_type != "owner":
             raise HTTPException(
                 status_code=403,
                 detail="You don't have owner access to this project!",
