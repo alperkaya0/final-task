@@ -1,5 +1,5 @@
-from typing import Optional
-from fastapi import FastAPI, HTTPException, Request, Depends
+from typing import Optional, Annotated
+from fastapi import FastAPI, HTTPException, Request, Depends, Header
 from pydantic import BaseModel
 from sqlalchemy import create_engine
 from sqlalchemy.engine import URL
@@ -147,6 +147,10 @@ class RegisterModel(BaseModel):
     password: str
     repeat_password: str
 
+class ProjectModel(BaseModel):
+    name: str
+    description: str
+
 # -----------------
 # 3. Routes (Endpoints)
 # -----------------
@@ -154,14 +158,24 @@ class RegisterModel(BaseModel):
 Session = sessionmaker(bind=engine)
 session = Session()
 
-def verify_token(req: Request):
-    token = req.headers["Authorization"] if "Authorization" in req.headers else ""
+def extract_token(header_value):
+    token = header_value.strip()
+    if "Bearer" in token and " " in token:
+        token = token.split(" ")[1]
+    return token
+
+def verify_token(authorization: Annotated[str | None, Header()] = None):
     try:
-        # try to decode the token, it will 
-        # raise error if the token is not correct
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        return True
-    except JWTError:
+        if authorization:
+            # try to decode the token, it will 
+            # raise error if the token is not correct
+            token = extract_token(authorization)
+            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+            return True
+        else:
+            raise JWTError()
+    except JWTError as e:
+        print(e)
         raise HTTPException(
             status_code=401,
             detail="Could not validate jwt token",
@@ -210,59 +224,200 @@ async def login_method(model: LoginModel):
 # POST /projects - Create project from details (name, description).
 # Automatically gives access to created project to user, making him the owner (admin of the project).
 @app.post("/projects")
-async def post_project(authorized: bool = Depends(verify_token)):
-    pass
+async def post_project(model: ProjectModel, authorized: bool = Depends(verify_token), authorization: Annotated[str | None, Header()] = None):
+    if authorized:
+        # create a project
+        new_project = Project(name=model.name, description=model.description)
+        session.add(new_project)
+        session.commit()
+        # get user id from username, get username from jwt
+        token = extract_token(authorization)
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user = session.query(UserTable).filter(UserTable.login == payload["login"]).first()
+        user_id = user.user_id
+        # add user2project, userid, projectid as owner access
+        new_relation = UserToProject(user_id=user_id, project_id=new_project.project_id, access_type="owner")
+        session.add(new_relation)
+        session.commit()
 
 # GET /projects - Get all projects, accessible for a user. Returns list of projects full info(details + documents).
 @app.get("/projects")
-async def get_projects(authorized: bool = Depends(verify_token)):
-    pass
+async def get_projects(authorized: bool = Depends(verify_token), authorization: Annotated[str | None, Header()] = None):
+    if authorized:
+        # get user id
+        token = extract_token(authorization)
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user = session.query(UserTable).filter(UserTable.login == payload["login"]).first()
+        if not user:
+            return []
+        user_id = user.user_id
+        # get all projects with that user_id
+        project_ids = session.query(UserToProject).filter(UserToProject.user_id == user_id).all()
+        project_ids = [x.project_id for x in project_ids]
+        projects = session.query(Project).filter(Project.project_id.in_(project_ids)).all()
+        return projects
 
 # GET /project/<project_id>/info - Return project’s details, if user has access
 @app.get("/projects/{project_id}/info")
-async def get_project(project_id: int, authorized: bool = Depends(verify_token)):
-    pass
+async def get_project(project_id: int, authorized: bool = Depends(verify_token), authorization: Annotated[str | None, Header()] = None):
+    if authorized:
+        # get user id
+        token = extract_token(authorization)
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user = session.query(UserTable).filter(UserTable.login == payload["login"]).first()
+        if not user:
+            raise HTTPException(
+                status_code=403,
+                detail="User couldn't find!",
+            )
+        user_id = user.user_id
+        # check access
+        relation = session.query(UserToProject).filter(UserToProject.user_id == user_id and UserToProject.project_id == project_id).first()
+        if not relation:
+            raise HTTPException(
+                status_code=403,
+                detail="You don't have access to this project!",
+            )
+        # 
+        return session.query(Project).filter(Project.project_id == project_id).first()
 
 # PUT /project/<project_id>/info - Update projects details - name, description. Returns the updated project’s info
 @app.put("/projects/{project_id}/info")
-async def put_project(project_id: int, authorized: bool = Depends(verify_token)): # needs to get a project model from request body
-    pass
+async def put_project(model: ProjectModel, project_id: int, authorized: bool = Depends(verify_token), authorization: Annotated[str | None, Header()] = None): # needs to get a project model from request body
+    if authorized:
+        # get user id
+        token = extract_token(authorization)
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user = session.query(UserTable).filter(UserTable.login == payload["login"]).first()
+        if not user:
+            raise HTTPException(
+                status_code=403,
+                detail="User couldn't find!",
+            )
+        user_id = user.user_id
+        # check access
+        relation = session.query(UserToProject).filter(UserToProject.user_id == user_id and UserToProject.project_id == project_id).first()
+        if not relation:
+            raise HTTPException(
+                status_code=403,
+                detail="You don't have access to this project!",
+            )
+        # get project and update
+        project = session.query(Project).filter(Project.project_id == project_id).first()
+        project.name = model.name
+        project.description = model.description
+        session.commit()
 
 # DELETE /project/<project_id>- Delete project, can only be performed by the projects’ owner. Deletes the corresponding documents
 @app.delete("/project/{project_id}")
-async def delete_project(project_id: int, authorized: bool = Depends(verify_token)):
-    pass
+async def delete_project(project_id: int, authorized: bool = Depends(verify_token), authorization: Annotated[str | None, Header()] = None):
+    if authorized:
+        # get user id
+        token = extract_token(authorization)
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user = session.query(UserTable).filter(UserTable.login == payload["login"]).first()
+        if not user:
+            raise HTTPException(
+                status_code=403,
+                detail="User couldn't find!",
+            )
+        user_id = user.user_id
+        # check access
+        relation = session.query(UserToProject).filter(UserToProject.user_id == user_id and UserToProject.project_id == project_id).first()
+        if not relation and relation.access_type == "owner":
+            raise HTTPException(
+                status_code=403,
+                detail="You don't have owner access to this project!",
+            )
+            return
+        # get and delete the project
+        project = session.query(Project).filter(Project.project_id == project_id).first()
+        session.delete(project)
+        # get document ids related to this project
+        document_relations = session.query(ProjectToDocument).filter(ProjectToDocument.project_id == project_id).all()
+        document_ids = [x.document_id for x in document_relations]
+        documents = session.query(Document).filter(Document.document_id.in_(document_ids)).all()
+        # delete documents and document relations since documents are tighted to projects
+        documents.delete()
+        document_relations.delete()
+        # get user relations related to this project and delete
+        session.query(UserToProject).filter(UserToProject.project_id == project_id).all().delete()
+        session.commit()
 
 # GET /project/<project_id>/documents- Return all of the project's documents
 @app.get("/project/{project_id}/documents")
-async def get_documents(project_id: int, authorized: bool = Depends(verify_token)):
-    pass
+async def get_documents(project_id: int, authorized: bool = Depends(verify_token), authorization: Annotated[str | None, Header()] = None):
+    if authorized:
+        # get user id
+        token = extract_token(authorization)
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user = session.query(UserTable).filter(UserTable.login == payload["login"]).first()
+        if not user:
+            raise HTTPException(
+                status_code=403,
+                detail="User couldn't find!",
+            )
+        user_id = user.user_id
+        # check access
+        relation = session.query(UserToProject).filter(UserToProject.user_id == user_id and UserToProject.project_id == project_id).first()
+        if not relation:
+            raise HTTPException(
+                status_code=403,
+                detail="You don't have access to this project!",
+            )
+        # get documents
+        relations = session.query(ProjectToDocument).filter(ProjectToDocument.project_id == project_id).all()
+        document_ids = [x.document_id for x in relations]
+        return session.query(Document).filter(Document.document_id.in_(document_ids)).all()
 
 # POST /project/<project_id>/documents - Upload document/documents for a specific project
 @app.post("/project/{project_id}/documents")
-async def post_document(project_id: int, authorized: bool = Depends(verify_token)):
+async def post_document(project_id: int, authorized: bool = Depends(verify_token), authorization: Annotated[str | None, Header()] = None):
     pass
 
 # GET /document/<document_id> - Download document, if the user has access to the corresponding project
 @app.get("/document/{document_id}")
-async def get_document(document_id: int, authorized: bool = Depends(verify_token)):
+async def download_document(document_id: int, authorized: bool = Depends(verify_token), authorization: Annotated[str | None, Header()] = None):
     pass
 
 # PUT /document/<document_id> - Update document
 @app.put("/document/{document_id}")
-async def put_document(document_id: int, authorized: bool = Depends(verify_token)):
+async def put_document(document_id: int, authorized: bool = Depends(verify_token), authorization: Annotated[str | None, Header()] = None):
     pass
 
 # DELETE /document/<document_id> - Delete document and remove it from the corresponding project
 @app.delete("/document/{document_id}")
-async def delete_document(document_id: int, authorized: bool = Depends(verify_token)):
+async def delete_document(document_id: int, authorized: bool = Depends(verify_token), authorization: Annotated[str | None, Header()] = None):
     pass
 
 # POST /project/<project_id>/invite?user= - Grant access to the project for a specific user.
 # If the request is not coming from the owner of the project, results in error.,
 # Granting access gives participant permissions to receiving user
 @app.post("/project/{project_id}/invite?user={username}")
-async def invite_to_project(project_id: int, username: str, authorized: bool = Depends(verify_token)):
-    pass
+async def invite_to_project(project_id: int, username: str, authorized: bool = Depends(verify_token), authorization: Annotated[str | None, Header()] = None):
+    if authorized:
+        # get user id
+        token = extract_token(authorization)
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user = session.query(UserTable).filter(UserTable.login == payload["login"]).first()
+        if not user:
+            raise HTTPException(
+                status_code=403,
+                detail="User couldn't find!",
+            )
+        user_id = user.user_id
+        # check access
+        relation = session.query(UserToProject).filter(UserToProject.user_id == user_id and UserToProject.project_id == project_id).first()
+        if not relation and relation.access_type == "owner":
+            raise HTTPException(
+                status_code=403,
+                detail="You don't have owner access to this project!",
+            )
+        # invite implementation
+        # Step 1 - Get user id of the invited user
+        invited_user = session.query(UserTable).filter(UserTable.login == username).first()
+        new_relation = UserToProject(user_id=invited_user.user_id,project_id=project_id,access_type="participant")
+        session.add(new_relation)
+        session.commit()
 
 # Run with: uvicorn app.main:app --reload
