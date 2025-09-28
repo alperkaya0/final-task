@@ -1,5 +1,6 @@
 from typing import Optional, Annotated
 from fastapi import FastAPI, HTTPException, Request, Depends, Header, File
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy import create_engine
 from sqlalchemy.engine import URL
@@ -429,17 +430,105 @@ async def post_document(file: Annotated[bytes, File()], project_id: int, authori
 # GET /document/<document_id> - Download document, if the user has access to the corresponding project
 @app.get("/document/{document_id}")
 async def download_document(document_id: int, authorized: bool = Depends(verify_token), authorization: Annotated[str | None, Header()] = None):
-    pass
+    if authorized:
+        try:
+            # get user id
+            token = extract_token(authorization)
+            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+            user = session.query(UserTable).filter(UserTable.login == payload["login"]).first()
+            if not user:
+                raise HTTPException(
+                    status_code=403,
+                    detail="User couldn't find!",
+                )
+            user_id = user.user_id
+            # check access
+            temp = session.query(ProjectToDocument).filter(ProjectToDocument.document_id == document_id).first()
+            if not temp:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Document doesn't exist!",
+                )
+            project_id = temp.project_id
+            relation = session.query(UserToProject).filter(UserToProject.user_id == user_id and UserToProject.project_id == project_id).first()
+            if not relation:
+                raise HTTPException(
+                    status_code=403,
+                    detail="You don't have access to this project!",
+                )
+            # upload document
+            document_sql_record = session.query(Document).filter(Document.document_id == relation.document_id).first()
+            with open("tempfile", 'wb') as f:
+                s3.download_fileobj(BUCKET_NAME, document_sql_record.s3_key, f)
+            return FileResponse(path="./tempfile", media_type='application/octet-stream', filename=document_sql_record.name)
+        except ClientError as e:
+            print(e)
+            raise HTTPException(
+                status_code=500,
+                detail="Couldn't upload it to AWS!"
+            )
+        except HTTPException as e:
+            raise e
 
 # PUT /document/<document_id> - Update document
 @app.put("/document/{document_id}")
-async def put_document(document_id: int, authorized: bool = Depends(verify_token), authorization: Annotated[str | None, Header()] = None):
-    pass
+async def put_document(file: Annotated[bytes, File()], document_id: int, authorized: bool = Depends(verify_token), authorization: Annotated[str | None, Header()] = None):
+    if authorized:
+        relation = session.query(ProjectToDocument).filter(ProjectToDocument.document_id == document_id).first()
+        if not relation:
+            raise HTTPException(
+                status_code=400,
+                detail="Document doesn't exist!"
+            )
+        project_id = relation.project_id
+        delete_document(document_id)
+        post_document(file, project_id)
 
 # DELETE /document/<document_id> - Delete document and remove it from the corresponding project
 @app.delete("/document/{document_id}")
 async def delete_document(document_id: int, authorized: bool = Depends(verify_token), authorization: Annotated[str | None, Header()] = None):
-    pass
+    if authorized:
+        try:
+            # get user id
+            token = extract_token(authorization)
+            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+            user = session.query(UserTable).filter(UserTable.login == payload["login"]).first()
+            if not user:
+                raise HTTPException(
+                    status_code=403,
+                    detail="User couldn't find!",
+                )
+            user_id = user.user_id
+            # check access
+            temp = session.query(ProjectToDocument).filter(ProjectToDocument.document_id == document_id).first()
+            if not temp:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Document doesn't exist!",
+                )
+            project_id = temp.project_id
+            relation = session.query(UserToProject).filter(UserToProject.user_id == user_id and UserToProject.project_id == project_id).first()
+            if not relation or relation.access_type != "owner":
+                raise HTTPException(
+                    status_code=403,
+                    detail="You don't have access to this project!",
+                )
+            # delete document
+            document_sql_record = session.query(Document).filter(Document.document_id == document_id).first()
+            document_relation = session.query(ProjectToDocument).filter(ProjectToDocument.document_id == document_id).first()
+            session.delete(document_sql_record)
+            session.delete(document_relation)
+            session.commit()
+            s3.delete_object(Bucket=BUCKET_NAME, Key=document_sql_record.s3_key)
+            return {"success": True}
+        except ClientError as e:
+            print(e)
+            raise HTTPException(
+                status_code=500,
+                detail="Couldn't upload it to AWS!"
+            )
+        except HTTPException as e:
+            raise e
 
 # POST /project/<project_id>/invite?user= - Grant access to the project for a specific user.
 # If the request is not coming from the owner of the project, results in error.,
