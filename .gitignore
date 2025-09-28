@@ -44,7 +44,7 @@ htmlcov/  # Coverage reports
 # Files containing secrets or sensitive data (e.g., local settings)
 *.log
 *.sqlite3 # Django/Flask default local database file
-.env
+*.env
 .env.*
 
 # --------------------
