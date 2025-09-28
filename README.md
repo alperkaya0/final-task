@@ -1,7 +1,7 @@
 ## General description:
 Theme: Project management/profiles dashboard - a service to  create, update, share, and delete projects information (details, attached documents)
 ### Warning
-Do `docker-compose down --volumes` beforehand if you are going to use docker-compose to both create web and db containers. Otherwise postgresql won't run schemas.sql and thus won't create sql tables.
+Do `docker-compose down --volumes` beforehand if you are going to use docker-compose to both create web and db containers.
 ### Stack:
 - Python3.12
 - FastAPI
@@ -43,4 +43,5 @@ GET /project/<project_id>/share?with=<email> - send a GET /join link with correc
 ## Implementation notes:
 1. All the returned data must be in JSON format (except for file data) + proper http status codes
 2. 2 types of access – owner (creator of the project, can do anything) and participant (user invited to the project, can modify, cannot delete)
+
 3. Exact API parameters/endpoints can be changed/updated upon agreement with the mentor, as long as they cover the described logic
